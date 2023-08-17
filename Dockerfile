@@ -1,24 +1,24 @@
-ARG BWS_VERSION=0.3.0
+ARG RUST_VERSION=1.65.0
 
-FROM debian:stable-slim as dl
-ARG BWS_VERSION
+FROM docker.io/rust:$RUST_VERSION-alpine as build
 
-RUN apt update && \
-    apt install -y wget unzip
-RUN wget https://github.com/bitwarden/sdk/releases/download/bws-v${BWS_VERSION}/bws-x86_64-unknown-linux-gnu-${BWS_VERSION}.zip && \
-    unzip bws-x86_64-unknown-linux-gnu-${BWS_VERSION}.zip && \
-    chmod +x bws
+WORKDIR /build
+# Copy cargo toml and lock so we can cache the fetch 
+COPY ./Cargo.lock ./Cargo.toml /build/
+RUN mkdir src && touch src/main.rs
+RUN cargo fetch
 
-RUN ls -lah
+RUN apk add --no-cache musl-dev openssl openssl-dev pkgconfig 
 
-FROM debian:stable-slim
+# Now copy the source and build it
+COPY src/ src/
+RUN cargo build --release
 
-RUN apt-get update && \
-    apt-get install -y ca-certificates openssl libssl-dev && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+FROM docker.io/alpine:3.14
 
-COPY --from=dl /bws /bws
+RUN apk add --no-cache ca-certificates openssl
 
-ENTRYPOINT ["/bws"]
+COPY --from=build /build/target/release/bws-rest-proxy /bws-rest-proxy
+
+ENTRYPOINT ["/bws-rest-proxy"]
 
