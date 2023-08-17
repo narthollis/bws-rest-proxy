@@ -5,7 +5,8 @@ use bitwarden::{
     Client,
 };
 use serde::ser::{Serialize, SerializeStruct};
-use std::convert::Infallible;
+use std::{convert::Infallible, net::SocketAddr};
+use tokio::signal::{self, unix::SignalKind};
 use tracing::*;
 use uuid::Uuid;
 use warp::{hyper::StatusCode, Filter};
@@ -162,8 +163,22 @@ async fn get_secret(
     Ok(reply)
 }
 
+async fn ctrlc() {
+    let mut sigint = signal::unix::signal(SignalKind::interrupt()).expect("Failed to bind SIGINT");
+    let mut sigterm =
+        signal::unix::signal(SignalKind::terminate()).expect("Failed to bind SIGTERM");
+
+    let kind = tokio::select! {
+        _ = signal::ctrl_c() => "Ctrl+C",
+        _ = sigint.recv() => "SIGINT",
+        _ = sigterm.recv() => "SIGTERM",
+    };
+
+    info!("Got {kind} - Shutting Down")
+}
+
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     let format = tracing_subscriber::fmt::format()
         .without_time()
         .with_level(false)
@@ -179,5 +194,12 @@ async fn main() {
         .and(warp::header::<String>("authorization"))
         .and_then(get_secret);
 
-    warp::serve(get_secret).run(([127, 0, 0, 1], 3030)).await;
+    let (addr, server) = warp::serve(get_secret)
+        .try_bind_with_graceful_shutdown(SocketAddr::from(([127, 0, 0, 1], 3030)), ctrlc())?;
+
+    info!(address = format!("{addr:?}"), "Listening, ctrl+c to exit");
+
+    server.await;
+
+    Ok(())
 }
