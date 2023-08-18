@@ -16,6 +16,12 @@ struct ErrorMessage {
     message: String,
 }
 
+impl Into<warp::reply::WithStatus<warp::reply::Json>> for ErrorMessage {
+    fn into(self) -> warp::reply::WithStatus<warp::reply::Json> {
+        warp::reply::with_status(warp::reply::json(&self), self.code)
+    }
+}
+
 impl Serialize for ErrorMessage {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -50,14 +56,14 @@ async fn get_secret(
     };
     let mut client = Client::new(Some(settings));
 
-    match client
-        .access_token_login(&AccessTokenLoginRequest {
-            access_token: access_token,
-        })
-        .await
-    {
-        Ok(r) => trace!(login_response = format!("{r:?}"), "login successful"),
-        Err(e) => error!(login_error = format!("{e:?}"), "login error"),
+    let token_request = &AccessTokenLoginRequest { access_token };
+    if let Err(e) = client.access_token_login(token_request).await {
+        error!(login_error = format!("{e:?}"), "login error");
+        return Ok(ErrorMessage {
+            code: StatusCode::UNAUTHORIZED,
+            message: "Unauthorized".into(),
+        }
+        .into());
     }
 
     let request = SecretGetRequest { id: secret_id };
@@ -140,9 +146,10 @@ async fn get_secret(
                     message = message,
                     "response content error"
                 );
+
                 Err(ErrorMessage {
-                    code: StatusCode::INTERNAL_SERVER_ERROR,
-                    message: "Internal Server Error".into(),
+                    code: status,
+                    message: todo!("try parsing the message"),
                 })
             }
             bitwarden::error::Error::Internal(e) => {
@@ -157,7 +164,7 @@ async fn get_secret(
 
     let reply = match result {
         Ok(r) => warp::reply::with_status(warp::reply::json(&r), StatusCode::OK),
-        Err(e) => warp::reply::with_status(warp::reply::json(&e), e.code),
+        Err(e) => e.into(),
     };
 
     Ok(reply)
