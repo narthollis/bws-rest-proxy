@@ -14,7 +14,7 @@ RUN apk add --no-cache musl-dev openssl openssl-dev pkgconfig
 COPY src/ src/
 RUN cargo build --release
 
-FROM docker.io/alpine:3.14
+FROM docker.io/alpine:3.18
 
 RUN apk add --no-cache ca-certificates openssl
 
