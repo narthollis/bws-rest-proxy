@@ -1,7 +1,7 @@
 use bitwarden::{
     auth::request::AccessTokenLoginRequest,
     client::client_settings::{ClientSettings, DeviceType},
-    secrets_manager::secrets::SecretGetRequest,
+    secrets_manager::secrets::{SecretGetRequest, SecretResponse},
     Client,
 };
 use serde::ser::{Serialize, SerializeStruct};
@@ -16,10 +16,13 @@ use tracing::*;
 use uuid::Uuid;
 use warp::{hyper::StatusCode, Filter};
 
+#[derive(Debug, Clone)]
 struct ErrorMessage {
     code: StatusCode,
     message: String,
 }
+
+impl warp::reject::Reject for ErrorMessage {}
 
 impl Into<warp::reply::WithStatus<warp::reply::Json>> for ErrorMessage {
     fn into(self) -> warp::reply::WithStatus<warp::reply::Json> {
@@ -63,7 +66,7 @@ async fn get_secret(
     project_id: Uuid,
     secret_id: Uuid,
     access_token: String,
-) -> Result<impl warp::Reply, Infallible> {
+) -> Result<SecretResponse, ErrorMessage> {
     info!(
         org_id = format!("{org_id:?}"),
         project_id = format!("{project_id:?}"),
@@ -76,16 +79,15 @@ async fn get_secret(
     let token_request = &AccessTokenLoginRequest { access_token };
     if let Err(e) = client.access_token_login(token_request).await {
         error!(login_error = format!("{e:?}"), "login error");
-        return Ok(ErrorMessage {
+        return Err(ErrorMessage {
             code: StatusCode::UNAUTHORIZED,
             message: "Unauthorized".into(),
-        }
-        .into());
+        });
     }
 
     let request = SecretGetRequest { id: secret_id };
 
-    let result = match client.secrets().get(&request).await {
+    match client.secrets().get(&request).await {
         Ok(r) => {
             if r.organization_id != org_id {
                 Err(ErrorMessage {
@@ -182,14 +184,37 @@ async fn get_secret(
                 })
             }
         },
-    };
+    }
 
-    let reply = match result {
-        Ok(r) => warp::reply::with_status(warp::reply::json(&r), StatusCode::OK),
-        Err(e) => e.into(),
-    };
+    // let reply = match result {
+    //     Ok(r) => warp::reply::with_status(warp::reply::json(&r), StatusCode::OK),
+    //     Err(e) => e.into(),
+    // };
 
-    Ok(reply)
+    // Ok(reply)
+}
+
+async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infallible> {
+    let content;
+    if err.is_not_found() {
+        content = ErrorMessage {
+            code: StatusCode::NOT_FOUND,
+            message: "Not Found".into(),
+        };
+    } else if let Some(e) = err.find::<ErrorMessage>() {
+        content = e.clone();
+    } else {
+        error!(err = format!("{err:?}"), "Unhandled Rejection");
+        content = ErrorMessage {
+            code: StatusCode::INTERNAL_SERVER_ERROR,
+            message: "Internal Server Error".into(),
+        };
+    }
+
+    Ok(warp::reply::with_status(
+        warp::reply::json(&content),
+        content.code,
+    ))
 }
 
 async fn exit_signals() {
@@ -228,13 +253,26 @@ async fn main() -> anyhow::Result<()> {
         .with_max_level(tracing::Level::INFO)
         .init();
 
-    // GET /hello/warp => 200 OK with body "Hello, warp!"
     let get_secret = warp::get()
         .and(warp::path!(Uuid / Uuid / "secret" / Uuid))
         .and(warp::header::<String>("authorization"))
-        .and_then(get_secret);
+        .and_then(|org, proj, secret, token| async move {
+            match get_secret(org, proj, secret, token).await {
+                Ok(r) => Ok(warp::reply::with_status(
+                    warp::reply::json(&r),
+                    StatusCode::OK,
+                )),
+                Err(e) => Err(warp::reject::custom(e)),
+            }
+        });
 
-    let (addr, server) = warp::serve(get_secret)
+    let health = warp::get()
+        .and(warp::path!("_health"))
+        .map(|| warp::reply::with_status("Ok", StatusCode::OK));
+
+    let routes = health.or(get_secret).recover(handle_rejection);
+
+    let (addr, server) = warp::serve(routes)
         .try_bind_with_graceful_shutdown(SocketAddr::from((ip, port)), exit_signals())?;
 
     info!(address = format!("{addr:?}"), "Listening, ctrl+c to exit");
