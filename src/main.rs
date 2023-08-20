@@ -5,7 +5,12 @@ use bitwarden::{
     Client,
 };
 use serde::ser::{Serialize, SerializeStruct};
-use std::{convert::Infallible, net::SocketAddr};
+use std::{
+    convert::Infallible,
+    env,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+};
 use tokio::signal::{self, unix::SignalKind};
 use tracing::*;
 use uuid::Uuid;
@@ -35,6 +40,24 @@ impl Serialize for ErrorMessage {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ResponseContent {
+    message: String,
+}
+
+fn client_settings() -> ClientSettings {
+    let identity_url =
+        env::var("BWS_IDENTITY_URL").unwrap_or("https://identity.bitwarden.com".to_string());
+    let api_url = env::var("BWS_API_URL").unwrap_or("https://api.bitwarden.com".to_string());
+
+    ClientSettings {
+        identity_url,
+        api_url,
+        user_agent: "bws_rest_proxy".to_string(),
+        device_type: DeviceType::SDK,
+    }
+}
+
 async fn get_secret(
     org_id: Uuid,
     project_id: Uuid,
@@ -48,13 +71,7 @@ async fn get_secret(
         "get_secret request"
     );
 
-    let settings = ClientSettings {
-        identity_url: "https://identity.bitwarden.com".to_string(),
-        api_url: "https://api.bitwarden.com".to_string(),
-        user_agent: "Bitwarden Rust-SDK".to_string(),
-        device_type: DeviceType::SDK,
-    };
-    let mut client = Client::new(Some(settings));
+    let mut client = Client::new(Some(client_settings()));
 
     let token_request = &AccessTokenLoginRequest { access_token };
     if let Err(e) = client.access_token_login(token_request).await {
@@ -147,9 +164,14 @@ async fn get_secret(
                     "response content error"
                 );
 
+                let m = match serde_json::from_str::<ResponseContent>(&message) {
+                    Ok(v) => v.message,
+                    Err(_) => message,
+                };
+
                 Err(ErrorMessage {
                     code: status,
-                    message: todo!("try parsing the message"),
+                    message: m,
                 })
             }
             bitwarden::error::Error::Internal(e) => {
@@ -170,7 +192,7 @@ async fn get_secret(
     Ok(reply)
 }
 
-async fn ctrlc() {
+async fn exit_signals() {
     let mut sigint = signal::unix::signal(SignalKind::interrupt()).expect("Failed to bind SIGINT");
     let mut sigterm =
         signal::unix::signal(SignalKind::terminate()).expect("Failed to bind SIGTERM");
@@ -186,6 +208,17 @@ async fn ctrlc() {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let mut args = env::args().skip(1);
+
+    let ip = match args.next() {
+        Some(a) => IpAddr::from_str(a.as_str())?,
+        None => IpAddr::from([127, 0, 0, 1]),
+    };
+    let port = match args.next() {
+        Some(a) => a.parse::<u16>()?,
+        None => 3030,
+    };
+
     let format = tracing_subscriber::fmt::format()
         .without_time()
         .with_level(false)
@@ -202,7 +235,7 @@ async fn main() -> anyhow::Result<()> {
         .and_then(get_secret);
 
     let (addr, server) = warp::serve(get_secret)
-        .try_bind_with_graceful_shutdown(SocketAddr::from(([127, 0, 0, 1], 3030)), ctrlc())?;
+        .try_bind_with_graceful_shutdown(SocketAddr::from((ip, port)), exit_signals())?;
 
     info!(address = format!("{addr:?}"), "Listening, ctrl+c to exit");
 
