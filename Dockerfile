@@ -21,4 +21,4 @@ RUN apk add --no-cache ca-certificates openssl
 COPY --from=build /build/target/release/bws-rest-proxy /bws-rest-proxy
 
 ENTRYPOINT ["/bws-rest-proxy"]
-
+CMD ["0.0.0.0", "3030"]
