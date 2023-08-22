@@ -17,7 +17,7 @@ RUN cargo build --release
 FROM docker.io/alpine:3.18
 
 RUN apk add --no-cache ca-certificates libssl1.1
-#RUN ln -s /lib/ld-musl-aarch64.so.1 /lib/ld-linux-aarch64.so.1
+RUN ln -s /lib/ld-musl-aarch64.so.1 /lib/ld-linux-aarch64.so.1
 
 COPY --from=build /build/target/release/bws-rest-proxy /bws-rest-proxy
 
