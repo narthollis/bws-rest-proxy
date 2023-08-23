@@ -1,223 +1,166 @@
-use bitwarden::{
-    auth::request::AccessTokenLoginRequest,
-    client::client_settings::{ClientSettings, DeviceType},
-    secrets_manager::secrets::{SecretGetRequest, SecretResponse},
-    Client,
-};
-use serde::ser::{Serialize, SerializeStruct};
+mod bw;
+
+use axum::{extract::State, response::IntoResponse, routing::get, Json, Router};
+use bw::{get_secret, ErrorMessage};
+use clap::Parser;
+use hyper::StatusCode;
 use std::{
-    convert::Infallible,
     env,
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
 use tokio::signal::{self, unix::SignalKind};
 use tracing::*;
-use uuid::Uuid;
-use warp::{hyper::StatusCode, Filter};
 
-#[derive(Debug, Clone)]
-struct ErrorMessage {
-    code: StatusCode,
-    message: String,
+use crate::bw::settings;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[arg(default_value = "0.0.0.0")]
+    listen_address: String,
+    #[arg(default_value = "3030")]
+    listen_port: u16,
+    #[arg(long)]
+    health_port: Option<u16>,
+    #[arg(long, requires = "health_port")]
+    health_address: Option<String>,
 }
 
-impl warp::reject::Reject for ErrorMessage {}
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let cli = Cli::parse();
 
-impl Into<warp::reply::WithStatus<warp::reply::Json>> for ErrorMessage {
-    fn into(self) -> warp::reply::WithStatus<warp::reply::Json> {
-        warp::reply::with_status(warp::reply::json(&self), self.code)
-    }
-}
+    let ip = IpAddr::from_str(cli.listen_address.as_str())?;
+    let port = cli.listen_port;
+    let health_ip = cli
+        .health_address
+        .map(|a| IpAddr::from_str(a.as_str()).ok())
+        .flatten();
 
-impl Serialize for ErrorMessage {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        let mut state = serializer.serialize_struct("ErrorMessage", 3)?;
+    tracing_subscriber::fmt()
+        .without_time()
+        .with_level(true)
+        .with_target(true)
+        .json()
+        .with_current_span(true)
+        .with_span_list(true)
+        .with_max_level(tracing::Level::INFO)
+        .init();
 
-        state.serialize_field("code", &self.code.as_u16())?;
-        state.serialize_field("message", &self.message)?;
-        state.end()
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct ResponseContent {
-    message: String,
-}
-
-fn client_settings() -> ClientSettings {
-    let identity_url =
-        env::var("BWS_IDENTITY_URL").unwrap_or("https://identity.bitwarden.com".to_string());
-    let api_url = env::var("BWS_API_URL").unwrap_or("https://api.bitwarden.com".to_string());
-
-    ClientSettings {
-        identity_url,
-        api_url,
-        user_agent: "bws_rest_proxy".to_string(),
-        device_type: DeviceType::SDK,
-    }
-}
-
-async fn get_secret(
-    org_id: Uuid,
-    project_id: Uuid,
-    secret_id: Uuid,
-    access_token: String,
-) -> Result<SecretResponse, ErrorMessage> {
-    info!(
-        org_id = format!("{org_id:?}"),
-        project_id = format!("{project_id:?}"),
-        secret_id = format!("{secret_id:?}"),
-        "get_secret request"
+    let settings = settings(
+        env::var("BWS_IDENTITY_URL").ok(),
+        env::var("BWS_API_URL").ok(),
     );
 
-    let mut client = Client::new(Some(client_settings()));
+    let app = Router::new()
+        .route("/:org_id/:project_id/secret/:secret_id", get(get_secret))
+        .route("/_health", get(health))
+        .with_state(settings)
+        .fallback(not_found_handler);
 
-    let token_request = &AccessTokenLoginRequest { access_token };
-    if let Err(e) = client.access_token_login(token_request).await {
-        error!(login_error = format!("{e:?}"), "login error");
-        return Err(ErrorMessage {
-            code: StatusCode::UNAUTHORIZED,
-            message: "Unauthorized".into(),
-        });
+    let addr = SocketAddr::from((ip, port));
+
+    let health_server;
+
+    if let Some(a) = health_ip {
+        if let Some(p) = cli.health_port {
+            let health_addr = SocketAddr::from((a, p));
+            if health_addr != addr {
+                let real_addr = match addr.ip().is_unspecified() {
+                    true => "127.0.0.1".to_string(),
+                    false => addr.ip().to_string(),
+                };
+                let client = reqwest::Client::new();
+                let r = Router::new().route("/_health", get(health_fw)).with_state((
+                    client,
+                    real_addr,
+                    addr.port(),
+                ));
+                health_server = Some(
+                    hyper::Server::bind(&health_addr)
+                        .serve(r.into_make_service())
+                        .with_graceful_shutdown(shutdown_signal()),
+                );
+            } else {
+                health_server = None;
+            }
+        } else {
+            health_server = None;
+        }
+    } else {
+        health_server = None
     }
 
-    let request = SecretGetRequest { id: secret_id };
+    let server = hyper::Server::bind(&addr)
+        .serve(app.into_make_service())
+        .with_graceful_shutdown(shutdown_signal());
 
-    match client.secrets().get(&request).await {
+    info!(address = format!("{addr:?}"), "Listening, ctrl+c to exit");
+    futures::future::join_all(match health_server {
+        Some(s) => vec![server, s],
+        None => vec![server],
+    })
+    .await
+    .into_iter()
+    .collect::<Result<_, hyper::Error>>()?;
+
+    Ok(())
+}
+
+async fn health() -> &'static str {
+    "Ok"
+}
+
+async fn health_fw(
+    State((client, addr, port)): State<(reqwest::Client, String, u16)>,
+) -> axum::response::Response {
+    let url = format!("http://{addr}:{port}/_health");
+    match client.get(&url).send().await {
         Ok(r) => {
-            if r.organization_id != org_id {
-                Err(ErrorMessage {
-                    code: StatusCode::BAD_REQUEST,
-                    message: "Bad Request".into(),
-                })
-            } else {
-                Ok(r)
+            let status = r.status();
+            match r.text().await {
+                Ok(b) => (status, b),
+                Err(e) => {
+                    info!(
+                        error = format!("{e:?}"),
+                        url = url,
+                        "Failed to read body of forwarded health check"
+                    );
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "Internal Server Error".into(),
+                    )
+                }
             }
         }
-        Err(err) => match err {
-            bitwarden::error::Error::NotAuthenticated => Err(ErrorMessage {
-                code: StatusCode::UNAUTHORIZED,
-                message: "Unauthorized".into(),
-            }),
-            bitwarden::error::Error::VaultLocked => Err(ErrorMessage {
-                code: StatusCode::LOCKED,
-                message: "Vault Locked".into(),
-            }),
-            bitwarden::error::Error::AccessTokenInvalid(e) => Err(ErrorMessage {
-                code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
-            }),
-            bitwarden::error::Error::InvalidResponse => Err(ErrorMessage {
-                code: StatusCode::UNPROCESSABLE_ENTITY,
-                message: "Invalid Response".into(),
-            }),
-            bitwarden::error::Error::MissingFields => Err(ErrorMessage {
-                code: StatusCode::UNPROCESSABLE_ENTITY,
-                message: "Missing Fields".into(),
-            }),
-            bitwarden::error::Error::Crypto(e) => Err(ErrorMessage {
-                code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
-            }),
-            bitwarden::error::Error::InvalidCipherString(e) => Err(ErrorMessage {
-                code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
-            }),
-            bitwarden::error::Error::IdentityFail(e) => Err(ErrorMessage {
-                code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
-            }),
-            bitwarden::error::Error::Reqwest(e) => {
-                error!(error = e.to_string(), "reqwest error");
-                Err(ErrorMessage {
-                    code: StatusCode::INTERNAL_SERVER_ERROR,
-                    message: "Internal Server Error".into(),
-                })
-            }
-            bitwarden::error::Error::Serde(e) => {
-                error!(error = e.to_string(), "serde error");
-                Err(ErrorMessage {
-                    code: StatusCode::INTERNAL_SERVER_ERROR,
-                    message: "Internal Server Error".into(),
-                })
-            }
-            bitwarden::error::Error::Io(e) => {
-                error!(error = e.to_string(), "io error");
-                Err(ErrorMessage {
-                    code: StatusCode::INTERNAL_SERVER_ERROR,
-                    message: "Internal Server Error".into(),
-                })
-            }
-            bitwarden::error::Error::InvalidBase64(e) => {
-                error!(error = e.to_string(), "base64 error");
-                Err(ErrorMessage {
-                    code: StatusCode::INTERNAL_SERVER_ERROR,
-                    message: "Internal Server Error".into(),
-                })
-            }
-            bitwarden::error::Error::ResponseContent { status, message } => {
-                error!(
-                    status = status.as_u16(),
-                    message = message,
-                    "response content error"
-                );
-
-                let m = match serde_json::from_str::<ResponseContent>(&message) {
-                    Ok(v) => v.message,
-                    Err(_) => message,
-                };
-
-                Err(ErrorMessage {
-                    code: status,
-                    message: m,
-                })
-            }
-            bitwarden::error::Error::Internal(e) => {
-                error!(error = e, "internal error");
-                Err(ErrorMessage {
-                    code: StatusCode::INTERNAL_SERVER_ERROR,
-                    message: "Internal Server Error".into(),
-                })
-            }
-        },
+        Err(e) => {
+            info!(
+                error = format!("{e:?}"),
+                url = url,
+                "Failed to forward health check"
+            );
+            (
+                e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                "Internal Server Error".into(),
+            )
+        }
     }
-
-    // let reply = match result {
-    //     Ok(r) => warp::reply::with_status(warp::reply::json(&r), StatusCode::OK),
-    //     Err(e) => e.into(),
-    // };
-
-    // Ok(reply)
+    .into_response()
 }
 
-async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infallible> {
-    let content;
-    if err.is_not_found() {
-        content = ErrorMessage {
+async fn not_found_handler() -> axum::response::Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(ErrorMessage {
             code: StatusCode::NOT_FOUND,
             message: "Not Found".into(),
-        };
-    } else if let Some(e) = err.find::<ErrorMessage>() {
-        content = e.clone();
-    } else {
-        error!(err = format!("{err:?}"), "Unhandled Rejection");
-        content = ErrorMessage {
-            code: StatusCode::INTERNAL_SERVER_ERROR,
-            message: "Internal Server Error".into(),
-        };
-    }
-
-    Ok(warp::reply::with_status(
-        warp::reply::json(&content),
-        content.code,
-    ))
+        }),
+    )
+        .into_response()
 }
 
-async fn exit_signals() {
+async fn shutdown_signal() {
     let mut sigint = signal::unix::signal(SignalKind::interrupt()).expect("Failed to bind SIGINT");
     let mut sigterm =
         signal::unix::signal(SignalKind::terminate()).expect("Failed to bind SIGTERM");
@@ -231,53 +174,10 @@ async fn exit_signals() {
     info!("Got {kind} - Shutting Down")
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let mut args = env::args().skip(1);
+impl IntoResponse for ErrorMessage {
+    fn into_response(self) -> axum::response::Response {
+        let body = Json(&self);
 
-    let ip = match args.next() {
-        Some(a) => IpAddr::from_str(a.as_str())?,
-        None => IpAddr::from([127, 0, 0, 1]),
-    };
-    let port = match args.next() {
-        Some(a) => a.parse::<u16>()?,
-        None => 3030,
-    };
-
-    let format = tracing_subscriber::fmt::format()
-        .without_time()
-        .with_level(false)
-        .with_target(false);
-    tracing_subscriber::fmt()
-        .event_format(format.pretty().with_source_location(false))
-        .with_max_level(tracing::Level::INFO)
-        .init();
-
-    let get_secret = warp::get()
-        .and(warp::path!(Uuid / Uuid / "secret" / Uuid))
-        .and(warp::header::<String>("authorization"))
-        .and_then(|org, proj, secret, token| async move {
-            match get_secret(org, proj, secret, token).await {
-                Ok(r) => Ok(warp::reply::with_status(
-                    warp::reply::json(&r),
-                    StatusCode::OK,
-                )),
-                Err(e) => Err(warp::reject::custom(e)),
-            }
-        });
-
-    let health = warp::get()
-        .and(warp::path!("_health"))
-        .map(|| warp::reply::with_status("Ok", StatusCode::OK));
-
-    let routes = health.or(get_secret).recover(handle_rejection);
-
-    let (addr, server) = warp::serve(routes)
-        .try_bind_with_graceful_shutdown(SocketAddr::from((ip, port)), exit_signals())?;
-
-    info!(address = format!("{addr:?}"), "Listening, ctrl+c to exit");
-
-    server.await;
-
-    Ok(())
+        (self.code, body).into_response()
+    }
 }
