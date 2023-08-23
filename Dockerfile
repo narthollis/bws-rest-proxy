@@ -1,6 +1,4 @@
-ARG RUST_VERSION=1.71.0
-
-FROM docker.io/rust:$RUST_VERSION-alpine as build
+FROM docker.io/rust:1.71.1-alpine as build
 
 RUN apk add --no-cache git musl-dev openssl openssl-dev pkgconfig
 
