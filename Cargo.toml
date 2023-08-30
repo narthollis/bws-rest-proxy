@@ -9,7 +9,7 @@ edition = "2021"
 anyhow = "1.0.75"
 axum = { version = "0.6", features = ["headers"] }
 bitwarden = { version = "*", features = ["secrets"] }
-clap = { version = "4.3.23", features = ["derive"] }
+clap = { version = "4.4.1", features = ["derive"] }
 futures = "0.3.28"
 hyper = { version = "0.14", features = ["full"] }
 reqwest = { version = "0.11" }
