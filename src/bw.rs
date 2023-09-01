@@ -83,7 +83,7 @@ impl Into<StructuredSecretResponse> for SecretResponse {
             organization_id: self.organization_id,
             project_id: self.project_id,
             key: self.key,
-            value: serde_json::from_str(&self.value)
+            value: serde_yaml::from_str(&self.value)
                 .unwrap_or(serde_json::Value::String(self.value)),
             note: self.note,
             creation_date: self.creation_date,
