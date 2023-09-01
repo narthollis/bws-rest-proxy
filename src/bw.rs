@@ -50,13 +50,44 @@ pub fn settings(identity_url: Option<String>, api_url: Option<String>) -> Settin
     }
 }
 
-impl Into<ClientSettings> for Settings {
-    fn into(self) -> ClientSettings {
+impl From<Settings> for ClientSettings {
+    fn from(val: Settings) -> ClientSettings {
         ClientSettings {
-            identity_url: self.identity_url.into(),
-            api_url: self.api_url.into(),
+            identity_url: val.identity_url,
+            api_url: val.api_url,
             user_agent: "bws_rest_proxy".to_string(),
             device_type: DeviceType::SDK,
+        }
+    }
+}
+#[derive(serde::Serialize, Clone)]
+pub struct StructuredSecretResponse {
+    pub object: String,
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub project_id: Option<Uuid>,
+
+    pub key: String,
+    pub value: serde_json::Value,
+    pub note: String,
+
+    pub creation_date: String,
+    pub revision_date: String,
+}
+
+impl Into<StructuredSecretResponse> for SecretResponse {
+    fn into(self) -> StructuredSecretResponse {
+        StructuredSecretResponse {
+            object: self.object,
+            id: self.id,
+            organization_id: self.organization_id,
+            project_id: self.project_id,
+            key: self.key,
+            value: serde_yaml::from_str(&self.value)
+                .unwrap_or(serde_json::Value::String(self.value)),
+            note: self.note,
+            creation_date: self.creation_date,
+            revision_date: self.revision_date,
         }
     }
 }
@@ -65,7 +96,7 @@ pub async fn get_secret(
     State(settings): State<Settings>,
     Path((org_id, project_id, secret_id)): Path<(Uuid, Uuid, Uuid)>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
-) -> Result<Json<SecretResponse>, ErrorMessage> {
+) -> Result<Json<StructuredSecretResponse>, ErrorMessage> {
     info!(
         org_id = format!("{org_id:?}"),
         project_id = format!("{project_id:?}"),
@@ -96,7 +127,7 @@ pub async fn get_secret(
                     message: "Bad Request".into(),
                 })
             } else {
-                Ok(Json(r))
+                Ok(Json(r.into()))
             }
         }
         Err(err) => match err {
@@ -110,7 +141,7 @@ pub async fn get_secret(
             }),
             bitwarden::error::Error::AccessTokenInvalid(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::InvalidResponse => Err(ErrorMessage {
                 code: StatusCode::UNPROCESSABLE_ENTITY,
@@ -122,15 +153,15 @@ pub async fn get_secret(
             }),
             bitwarden::error::Error::Crypto(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::InvalidCipherString(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::IdentityFail(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::Reqwest(e) => {
                 error!(error = e.to_string(), "reqwest error");
