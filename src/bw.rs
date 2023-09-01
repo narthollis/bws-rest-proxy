@@ -60,12 +60,43 @@ impl From<Settings> for ClientSettings {
         }
     }
 }
+#[derive(serde::Serialize, Clone)]
+pub struct StructuredSecretResponse {
+    pub object: String,
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub project_id: Option<Uuid>,
+
+    pub key: String,
+    pub value: serde_json::Value,
+    pub note: String,
+
+    pub creation_date: String,
+    pub revision_date: String,
+}
+
+impl Into<StructuredSecretResponse> for SecretResponse {
+    fn into(self) -> StructuredSecretResponse {
+        StructuredSecretResponse {
+            object: self.object,
+            id: self.id,
+            organization_id: self.organization_id,
+            project_id: self.project_id,
+            key: self.key,
+            value: serde_json::from_str(&self.value)
+                .unwrap_or(serde_json::Value::String(self.value)),
+            note: self.note,
+            creation_date: self.creation_date,
+            revision_date: self.revision_date,
+        }
+    }
+}
 
 pub async fn get_secret(
     State(settings): State<Settings>,
     Path((org_id, project_id, secret_id)): Path<(Uuid, Uuid, Uuid)>,
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
-) -> Result<Json<SecretResponse>, ErrorMessage> {
+) -> Result<Json<StructuredSecretResponse>, ErrorMessage> {
     info!(
         org_id = format!("{org_id:?}"),
         project_id = format!("{project_id:?}"),
@@ -96,7 +127,7 @@ pub async fn get_secret(
                     message: "Bad Request".into(),
                 })
             } else {
-                Ok(Json(r))
+                Ok(Json(r.into()))
             }
         }
         Err(err) => match err {
