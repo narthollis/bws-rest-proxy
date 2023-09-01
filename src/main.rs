@@ -35,8 +35,7 @@ async fn main() -> anyhow::Result<()> {
     let port = cli.listen_port;
     let health_ip = cli
         .health_address
-        .map(|a| IpAddr::from_str(a.as_str()).ok())
-        .flatten();
+        .and_then(|a| IpAddr::from_str(a.as_str()).ok());
 
     tracing_subscriber::fmt()
         .without_time()
