@@ -50,11 +50,11 @@ pub fn settings(identity_url: Option<String>, api_url: Option<String>) -> Settin
     }
 }
 
-impl Into<ClientSettings> for Settings {
-    fn into(self) -> ClientSettings {
+impl From<Settings> for ClientSettings {
+    fn from(val: Settings) -> ClientSettings {
         ClientSettings {
-            identity_url: self.identity_url.into(),
-            api_url: self.api_url.into(),
+            identity_url: val.identity_url,
+            api_url: val.api_url,
             user_agent: "bws_rest_proxy".to_string(),
             device_type: DeviceType::SDK,
         }
@@ -110,7 +110,7 @@ pub async fn get_secret(
             }),
             bitwarden::error::Error::AccessTokenInvalid(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::InvalidResponse => Err(ErrorMessage {
                 code: StatusCode::UNPROCESSABLE_ENTITY,
@@ -122,15 +122,15 @@ pub async fn get_secret(
             }),
             bitwarden::error::Error::Crypto(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::InvalidCipherString(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::IdentityFail(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
-                message: e.to_string().into(),
+                message: e.to_string(),
             }),
             bitwarden::error::Error::Reqwest(e) => {
                 error!(error = e.to_string(), "reqwest error");
