@@ -1,12 +1,16 @@
 FROM docker.io/rust:1.72.0-alpine as build
 
-RUN apk add --no-cache git musl-dev openssl openssl-dev pkgconfig
+RUN apk add --no-cache git libssl1.1 musl-dev openssl openssl-dev pkgconfig
 
 WORKDIR /build
 # Copy cargo toml and lock so we can cache the fetch 
-COPY ./Cargo.lock ./Cargo.toml /build/
-RUN mkdir src && touch src/main.rs
-RUN cargo fetch --config net.git-fetch-with-cli=true 
+COPY Cargo.lock Cargo.toml /build/
+# Create dummy files for being able to cache deps fetch and deps build
+RUN mkdir /build/src && \
+    echo 'fn main() {}' > /build/src/main.rs && \
+    cargo fetch --config net.git-fetch-with-cli=true && \
+    cargo build --release && \
+    rm -Rvf /build/src
 
 # Now copy the source and build it
 COPY src/ src/
