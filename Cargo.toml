@@ -20,7 +20,7 @@ serde_json = "1.0.107"
 serde_yaml = "0.9.25"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.17", features = ["json"] }
-tokio = { version = "1.32.0", features = [
+tokio = { version = "1.33.0", features = [
     "rt-multi-thread",
     "net",
     "macros",
