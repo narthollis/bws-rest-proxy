@@ -5,7 +5,7 @@ use axum::{
     Json, TypedHeader,
 };
 use bitwarden::{
-    auth::request::AccessTokenLoginRequest,
+    auth::login::AccessTokenLoginRequest,
     client::client_settings::{ClientSettings, DeviceType},
     secrets_manager::secrets::{SecretGetRequest, SecretResponse},
     Client,
@@ -62,7 +62,6 @@ impl From<Settings> for ClientSettings {
 }
 #[derive(serde::Serialize, Clone)]
 pub struct StructuredSecretResponse {
-    pub object: String,
     pub id: Uuid,
     pub organization_id: Uuid,
     pub project_id: Option<Uuid>,
@@ -75,19 +74,18 @@ pub struct StructuredSecretResponse {
     pub revision_date: String,
 }
 
-impl Into<StructuredSecretResponse> for SecretResponse {
-    fn into(self) -> StructuredSecretResponse {
+impl From<SecretResponse> for StructuredSecretResponse {
+    fn from(val: SecretResponse) -> Self {
         StructuredSecretResponse {
-            object: self.object,
-            id: self.id,
-            organization_id: self.organization_id,
-            project_id: self.project_id,
-            key: self.key,
-            value: serde_yaml::from_str(&self.value)
-                .unwrap_or(serde_json::Value::String(self.value)),
-            note: self.note,
-            creation_date: self.creation_date,
-            revision_date: self.revision_date,
+            id: val.id,
+            organization_id: val.organization_id,
+            project_id: val.project_id,
+            key: val.key,
+            value: serde_yaml::from_str(&val.value)
+                .unwrap_or(serde_json::Value::String(val.value)),
+            note: val.note,
+            creation_date: val.creation_date.to_rfc3339(),
+            revision_date: val.revision_date.to_rfc3339(),
         }
     }
 }
@@ -108,8 +106,9 @@ pub async fn get_secret(
 
     let token_request = &AccessTokenLoginRequest {
         access_token: auth.token().to_string(),
+        state_file: None,
     };
-    if let Err(e) = client.access_token_login(token_request).await {
+    if let Err(e) = client.auth().login_access_token(token_request).await {
         error!(login_error = format!("{e:?}"), "login error");
         return Err(ErrorMessage {
             code: StatusCode::UNAUTHORIZED,
@@ -155,7 +154,7 @@ pub async fn get_secret(
                 code: StatusCode::UNAUTHORIZED,
                 message: e.to_string(),
             }),
-            bitwarden::error::Error::InvalidCipherString(e) => Err(ErrorMessage {
+            bitwarden::error::Error::InvalidEncString(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
                 message: e.to_string(),
             }),
@@ -191,6 +190,13 @@ pub async fn get_secret(
                     message: "Internal Server Error".into(),
                 })
             }
+            bitwarden::error::Error::Chrono(e) => {
+                error!(error = e.to_string(), "chrono error");
+                Err(ErrorMessage {
+                    code: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: "Internal Server Error".into(),
+                })
+            }
             bitwarden::error::Error::ResponseContent { status, message } => {
                 error!(
                     status = status.as_u16(),
@@ -208,8 +214,22 @@ pub async fn get_secret(
                     message: m,
                 })
             }
+            bitwarden::error::Error::InvalidStateFileVersion => {
+                error!("invalid state file version");
+                Err(ErrorMessage {
+                    code: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: "Internal Server Error".into(),
+                })
+            }
+            bitwarden::error::Error::InvalidStateFile => {
+                error!("invalid state file");
+                Err(ErrorMessage {
+                    code: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: "Internal Server Error".into(),
+                })
+            }
             bitwarden::error::Error::Internal(e) => {
-                error!(error = e, "internal error");
+                error!(error = e.to_string(), "internal error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
