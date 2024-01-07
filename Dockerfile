@@ -24,10 +24,10 @@ RUN touch src/main.rs && \
 
 RUN ls /build/target/release
 
-FROM docker.io/alpine:3.18
+FROM docker.io/alpine:3.19
 ARG TARGETARCH
 
-RUN apk add --no-cache ca-certificates libssl1.1 libgcc
+RUN apk add --no-cache ca-certificates libssl3 libgcc
 
 COPY --from=build /build/target/release/bws-rest-proxy /bws-rest-proxy
 
