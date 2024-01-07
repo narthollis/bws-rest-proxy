@@ -7,7 +7,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.75"
-axum = { version = "0.6.20", features = ["headers"] }
+axum = { version = "0.7.3", features = ["headers"] }
 bitwarden = { version = "0.4.0", features = ["secrets"] }
 clap = { version = "4.4.13", features = ["derive"] }
 futures = "0.3.29"
