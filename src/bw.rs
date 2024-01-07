@@ -1,8 +1,11 @@
 use axum::{
     extract::{Path, State},
-    headers::{authorization::Bearer, Authorization},
     http::StatusCode,
-    Json, TypedHeader,
+    Json,
+};
+use axum_extra::{
+    TypedHeader,
+    headers::{authorization::Bearer, Authorization}
 };
 use bitwarden::{
     auth::login::AccessTokenLoginRequest,
@@ -210,7 +213,7 @@ pub async fn get_secret(
                 };
 
                 Err(ErrorMessage {
-                    code: status,
+                    code: StatusCode::from_u16(status.as_u16()).unwrap(), // This is super annoying due to conflicting dep versions from what I can see
                     message: m,
                 })
             }

@@ -9,6 +9,7 @@ use std::{
     net::{IpAddr, SocketAddr},
     str::FromStr,
 };
+use std::future::{IntoFuture};
 use tokio::signal::{self, unix::SignalKind};
 use tracing::*;
 
@@ -60,6 +61,7 @@ async fn main() -> anyhow::Result<()> {
 
     let addr = SocketAddr::from((ip, port));
 
+
     let health_server;
 
     if let Some(a) = health_ip {
@@ -76,10 +78,9 @@ async fn main() -> anyhow::Result<()> {
                     real_addr,
                     addr.port(),
                 ));
+                let health_listener = tokio::net::TcpListener::bind(&health_addr).await?;
                 health_server = Some(
-                    hyper::Server::bind(&health_addr)
-                        .serve(r.into_make_service())
-                        .with_graceful_shutdown(shutdown_signal()),
+                    axum::serve(health_listener, r).with_graceful_shutdown(shutdown_signal())
                 );
             } else {
                 health_server = None;
@@ -88,21 +89,21 @@ async fn main() -> anyhow::Result<()> {
             health_server = None;
         }
     } else {
-        health_server = None
+        health_server = None;
     }
 
-    let server = hyper::Server::bind(&addr)
-        .serve(app.into_make_service())
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+    let server = axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal());
 
     info!(address = format!("{addr:?}"), "Listening, ctrl+c to exit");
     futures::future::join_all(match health_server {
-        Some(s) => vec![server, s],
-        None => vec![server],
+        None => vec![server.into_future()],
+        Some(h) => vec![server.into_future(), h.into_future()],
     })
-    .await
-    .into_iter()
-    .collect::<Result<_, hyper::Error>>()?;
+        .await
+        .into_iter()
+        .collect::<Result<_, std::io::Error>>()?;
 
     Ok(())
 }
@@ -119,7 +120,7 @@ async fn health_fw(
         Ok(r) => {
             let status = r.status();
             match r.text().await {
-                Ok(b) => (status, b),
+                Ok(b) => (StatusCode::from_u16(status.as_u16()).unwrap(), b),
                 Err(e) => {
                     info!(
                         error = format!("{e:?}"),
@@ -140,12 +141,12 @@ async fn health_fw(
                 "Failed to forward health check"
             );
             (
-                e.status().unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                e.status().map(|s| StatusCode::from_u16(s.as_u16()).unwrap()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
                 "Internal Server Error".into(),
             )
         }
     }
-    .into_response()
+        .into_response()
 }
 
 async fn not_found_handler() -> axum::response::Response {
