@@ -10,7 +10,7 @@ anyhow = "1.0.81"
 axum = { version = "0.7.5", features = [] }
 axum-extra = { version = "0.9.2", features = ["typed-header"], default-features = false }
 bitwarden = { version = "0.4.0", features = ["secrets"] }
-clap = { version = "4.5.3", features = ["derive"] }
+clap = { version = "4.5.4", features = ["derive"] }
 futures = "0.3.30"
 hyper = { version = "1.2.0", features = ["full"] }
 reqwest = { version = "0.11.26", default_features = false, features = [
