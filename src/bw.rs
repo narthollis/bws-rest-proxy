@@ -4,8 +4,8 @@ use axum::{
     Json,
 };
 use axum_extra::{
+    headers::{authorization::Bearer, Authorization},
     TypedHeader,
-    headers::{authorization::Bearer, Authorization}
 };
 use bitwarden::{
     auth::login::AccessTokenLoginRequest,
@@ -84,8 +84,7 @@ impl From<SecretResponse> for StructuredSecretResponse {
             organization_id: val.organization_id,
             project_id: val.project_id,
             key: val.key,
-            value: serde_yaml::from_str(&val.value)
-                .unwrap_or(serde_json::Value::String(val.value)),
+            value: serde_yaml::from_str(&val.value).unwrap_or(serde_json::Value::String(val.value)),
             note: val.note,
             creation_date: val.creation_date.to_rfc3339(),
             revision_date: val.revision_date.to_rfc3339(),
@@ -149,15 +148,11 @@ pub async fn get_secret(
                 code: StatusCode::UNPROCESSABLE_ENTITY,
                 message: "Invalid Response".into(),
             }),
-            bitwarden::error::Error::MissingFields => Err(ErrorMessage {
+            bitwarden::error::Error::MissingFields(fields) => Err(ErrorMessage {
                 code: StatusCode::UNPROCESSABLE_ENTITY,
-                message: "Missing Fields".into(),
+                message: format!("Missing Fields: {fields}"),
             }),
             bitwarden::error::Error::Crypto(e) => Err(ErrorMessage {
-                code: StatusCode::UNAUTHORIZED,
-                message: e.to_string(),
-            }),
-            bitwarden::error::Error::InvalidEncString(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
                 message: e.to_string(),
             }),
