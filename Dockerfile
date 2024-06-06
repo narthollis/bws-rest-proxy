@@ -24,7 +24,7 @@ RUN touch src/main.rs && \
 
 RUN ls /build/target/release
 
-FROM docker.io/alpine:3.19
+FROM docker.io/alpine:3.20
 ARG TARGETARCH
 
 RUN apk add --no-cache ca-certificates libssl3 libgcc
