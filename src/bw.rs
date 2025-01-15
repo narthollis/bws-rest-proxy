@@ -10,7 +10,10 @@ use axum_extra::{
 use bitwarden::{
     auth::login::AccessTokenLoginRequest,
     client::client_settings::{ClientSettings, DeviceType},
-    secrets_manager::secrets::{SecretGetRequest, SecretResponse},
+    secrets_manager::{
+        secrets::{SecretGetRequest, SecretResponse},
+        ClientSecretsExt,
+    },
     Client,
 };
 use serde::{ser::SerializeStruct, Serialize};
@@ -132,70 +135,81 @@ pub async fn get_secret(
             }
         }
         Err(err) => match err {
-            bitwarden::error::Error::NotAuthenticated => Err(ErrorMessage {
+            bitwarden::Error::NotAuthenticated => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
                 message: "Unauthorized".into(),
             }),
-            bitwarden::error::Error::VaultLocked => Err(ErrorMessage {
+            bitwarden::Error::VaultLocked(_) => Err(ErrorMessage {
                 code: StatusCode::LOCKED,
                 message: "Vault Locked".into(),
             }),
-            bitwarden::error::Error::AccessTokenInvalid(e) => Err(ErrorMessage {
+            bitwarden::Error::AccessTokenInvalid(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
                 message: e.to_string(),
             }),
-            bitwarden::error::Error::InvalidResponse => Err(ErrorMessage {
+            bitwarden::Error::InvalidResponse => Err(ErrorMessage {
                 code: StatusCode::UNPROCESSABLE_ENTITY,
                 message: "Invalid Response".into(),
             }),
-            bitwarden::error::Error::MissingFields(fields) => Err(ErrorMessage {
+            bitwarden::Error::MissingFieldError(fields) => Err(ErrorMessage {
                 code: StatusCode::UNPROCESSABLE_ENTITY,
                 message: format!("Missing Fields: {fields}"),
             }),
-            bitwarden::error::Error::Crypto(e) => Err(ErrorMessage {
+            bitwarden::Error::ValidationError(e) => Err(ErrorMessage {
+                code: StatusCode::BAD_REQUEST,
+                message: format!("Validation error: {e}"),
+            }),
+            bitwarden::Error::Crypto(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
                 message: e.to_string(),
             }),
-            bitwarden::error::Error::IdentityFail(e) => Err(ErrorMessage {
+            bitwarden::Error::IdentityFail(e) => Err(ErrorMessage {
                 code: StatusCode::UNAUTHORIZED,
                 message: e.to_string(),
             }),
-            bitwarden::error::Error::Reqwest(e) => {
+            bitwarden::Error::EncryptionSettings(e) => {
+                error!(error = e.to_string(), "encryption settings error");
+                Err(ErrorMessage {
+                    code: StatusCode::INTERNAL_SERVER_ERROR,
+                    message: "Internal Server Error".into(),
+                })
+            }
+            bitwarden::Error::Reqwest(e) => {
                 error!(error = e.to_string(), "reqwest error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::Serde(e) => {
+            bitwarden::Error::Serde(e) => {
                 error!(error = e.to_string(), "serde error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::Io(e) => {
+            bitwarden::Error::Io(e) => {
                 error!(error = e.to_string(), "io error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::InvalidBase64(e) => {
+            bitwarden::Error::InvalidBase64(e) => {
                 error!(error = e.to_string(), "base64 error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::Chrono(e) => {
+            bitwarden::Error::Chrono(e) => {
                 error!(error = e.to_string(), "chrono error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::ResponseContent { status, message } => {
+            bitwarden::Error::ResponseContent { status, message } => {
                 error!(
                     status = status.as_u16(),
                     message = message,
@@ -212,21 +226,21 @@ pub async fn get_secret(
                     message: m,
                 })
             }
-            bitwarden::error::Error::InvalidStateFileVersion => {
+            bitwarden::Error::InvalidStateFileVersion => {
                 error!("invalid state file version");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::InvalidStateFile => {
+            bitwarden::Error::InvalidStateFile => {
                 error!("invalid state file");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
                     message: "Internal Server Error".into(),
                 })
             }
-            bitwarden::error::Error::Internal(e) => {
+            bitwarden::Error::Internal(e) => {
                 error!(error = e.to_string(), "internal error");
                 Err(ErrorMessage {
                     code: StatusCode::INTERNAL_SERVER_ERROR,
