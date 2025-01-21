@@ -8,7 +8,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.82"
 axum = { version = "0.8.0", features = [] }
-axum-extra = { version = "0.10.0", features = ["typed-header"], default-features = false }
+axum-extra = { version = "0.11.0", features = ["typed-header"], default-features = false }
 bitwarden = { version = "1.0.0", features = ["secrets"] }
 clap = { version = "4.5.4", features = ["derive"] }
 futures = "0.3.30"
