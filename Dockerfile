@@ -1,4 +1,4 @@
-FROM docker.io/rust:1.84.0-alpine as build
+FROM docker.io/rust:1.84.1-alpine as build
 ARG TARGETARCH
 
 RUN apk add --no-cache git musl-dev openssl-dev pkgconfig
