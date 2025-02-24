@@ -3,6 +3,7 @@
   "extends": [
     "config:base"
   ],
+  "assignees": ["narthollis"],
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
