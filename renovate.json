@@ -4,6 +4,7 @@
     "config:base"
   ],
   "assignees": ["narthollis"],
+  "reviewers": ["narthollis"],
   "lockFileMaintenance": {
     "enabled": true,
     "automerge": true
